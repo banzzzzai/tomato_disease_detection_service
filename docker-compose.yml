@@ -1,0 +1,164 @@
+version: '3.8'
+
+services:
+  # Общий сервис сборки образа
+  backend:
+    build:
+      context: .
+      cache_from:
+        - recognition-backend:latest
+    image: recognition-backend
+    environment:
+        TZ: Europe/Moscow
+
+  # # Контейнер с postgres
+  # postgres:
+  #   deploy:
+  #     replicas: 1
+  #   image: postgres:16
+  #   restart: always
+  #   expose:
+  #     - "5432"
+  #   ports:
+  #   - mode: ingress
+  #     target: 5432
+  #     published: 5438
+  #     protocol: tcp
+  #   environment:
+  #     POSTGRES_USER: ${POSTGRES_USER}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  #     POSTGRES_DB: ${POSTGRES_DB}
+  #     TZ: Europe/Moscow
+  #     PGTZ: Europe/Moscow
+  #   volumes:
+  #     - ./postgres/init:/docker-entrypoint-initdb.d/
+  #     - ./postgres/data:/var/lib/postgresql/data
+  #     - ./postgres/backups:/backups
+  #     - ./postgres/postgres.conf:/var/lib/postgresql/postgresql.conf
+  #   shm_size: '12gb'
+  #   command: postgres -c config_file=/var/lib/postgresql/postgresql.conf
+  #   networks:
+  #     - default
+
+
+  # Контейнер с БД Redis.
+  redis-server:
+    user: root
+    image: redis:7.2
+    expose:
+      - "6379"
+    ports:
+    - mode: ingress
+      target: 6379
+      published: 6378
+      protocol: tcp
+    command: 'bash -c "redis-server /etc/redis.conf"'
+    volumes:
+      - ./redis/data:/var/lib/redis
+      - ./redis/redis.conf:/etc/redis.conf
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1000m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks:
+      - default
+
+  # Контейнер с воркером Celery. Выполняет таски из очереди в Redis, предназначен для процессов, скорость выполнения
+  # которых ограничена производительностью процессора
+  # Воркер по обработке задач роутинга
+  celery-recognition-worker:
+    image: recognition-backend
+    restart: always
+    command: celery -A asynchrony.celery_main.app worker -n image_recognition_worker --loglevel=INFO --pool=prefork -Q image_recognition
+    working_dir: /usr/src/app
+    volumes:
+      - ./app:/usr/src/app
+      - ./.env:/usr/src/app/.env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1000m"
+        max-file: "5"
+    environment:
+      TZ: Europe/Moscow
+    depends_on:
+      - redis-server
+      - api
+      - backend
+
+  # Веб-интерфейс для отслеживания выполнения задач в Celery
+  celery-flower:
+    image: recognition-backend
+    expose:
+      - "5555"
+    ports:
+    - mode: ingress
+      target: 5555
+      published: 5555
+      protocol: tcp
+    restart: always
+    command: celery -A asynchrony.celery_main.app flower --basic-auth=admin:C38R9cgy --port=5555
+    working_dir: /usr/src/app
+    volumes:
+      - ./app:/usr/src/app
+      - ./.env:/usr/src/app/.env
+    environment:
+      TZ: Europe/Moscow
+    depends_on:
+      - redis-server
+      - api
+      - backend
+
+  # Контейнер для апи на Python с библиотекой FastApi
+  api:
+    deploy:
+      replicas: ${API_REPLICAS}
+    image: recognition-backend
+    restart: always
+    depends_on:
+      - backend
+      - redis-server
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1000m"
+        max-file: "5"
+    working_dir: /usr/src/app
+    volumes:
+      - ./app:/usr/src/app
+      - ./.env:/usr/src/app/.env
+    command: bash -c "
+      uvicorn main:app --host 0.0.0.0 --port 4000"
+    environment:
+        TZ: Europe/Moscow
+    networks:
+      - default
+
+  # Контейнер с реверс-прокси Nginx, точка входа в апи
+  web:
+    restart: always
+    image: nginx
+    depends_on:
+      - api
+    volumes:
+      - ./web/conf.d:/etc/nginx/conf.d
+      - ./:/usr/src/app
+    ports:
+    - mode: ingress
+      target: 80
+      published: 81
+      protocol: tcp
+    environment:
+      TZ: Europe/Moscow
+    networks:
+      - default
+
+networks:
+  default:
+    driver: bridge

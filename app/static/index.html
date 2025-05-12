@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Распознавание болезней томатов</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background-color: #f9f9f9; }
+        h1 { color: #2c3e50; }
+        #result { margin-top: 20px; padding: 20px; background: #fff; border: 1px solid #ccc; }
+        img { max-width: 300px; border: 1px solid #333; margin-top: 10px; }
+    </style>
+</head>
+<body>
+<h1>Распознавание болезни по изображению листа</h1>
+
+<form id="uploadForm">
+    <input type="file" name="file" accept="image/*" required />
+    <button type="submit">Отправить</button>
+</form>
+
+<div id="result" style="display: none;">
+    <p><strong>Класс:</strong> <span id="predictedClass"></span></p>
+    <p><strong>Уверенность:</strong> <span id="confidence"></span></p>
+    <p><strong>Тепловая карта:</strong></p>
+    <img id="heatmap" />
+</div>
+
+<script>
+document.getElementById('uploadForm').onsubmit = async function (e) {
+    e.preventDefault();
+
+    const fileInput = e.target.querySelector('input[type="file"]');
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+
+    const response = await fetch("/recognition/", {
+        method: "POST",
+        body: formData
+    });
+
+    if (!response.ok) {
+        alert("Ошибка при отправке изображения");
+        return;
+    }
+
+    const data = await response.json();
+    document.getElementById("predictedClass").innerText = data.class;
+    document.getElementById("confidence").innerText = data.confidence.toFixed(3);
+    document.getElementById("heatmap").src = "data:image/jpeg;base64," + data.heatmap_base64;
+    document.getElementById("result").style.display = "block";
+};
+</script>
+
+</body>
+</html>
